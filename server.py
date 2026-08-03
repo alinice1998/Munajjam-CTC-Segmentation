@@ -26,8 +26,8 @@ jobs: dict = {}
 # ThreadPoolExecutor بمسار واحد لمنع تداخل عمليات كرت الشاشة (GPU)
 _executor = ThreadPoolExecutor(max_workers=1)
 
-print("Initializing global WhisperX transcriber (models will be loaded lazily on first request)...")
-global_transcriber = WhisperFactory().create_whisper(backend=WhisperBackend.WHISPERX, model_name="large-v2")
+print("Initializing global CTC transcriber (models will be loaded lazily on first request)...")
+global_transcriber = WhisperFactory().create_whisper(backend=WhisperBackend.CTC, model_name="jonatasgrosman/wav2vec2-large-xlsr-53-arabic")
 
 def _run_job(job_id: str, file_location: str, surah_number: int):
     """
@@ -36,9 +36,9 @@ def _run_job(job_id: str, file_location: str, surah_number: int):
     try:
         jobs[job_id]["status"] = "processing"
 
-        print(f"[Job {job_id[:8]}] Started processing Surah {surah_number} with WhisperX")
+        print(f"[Job {job_id[:8]}] Started processing Surah {surah_number} with CTC Segmentation")
 
-        # استخدام WhisperX للحصول على تزمين على مستوى الكلمات (من الذاكرة المؤقتة)
+        # استخدام CTC للحصول على تزمين على مستوى الكلمات
         segments = global_transcriber.transcribe(file_location, surah_id=surah_number)
 
         response_data = []
