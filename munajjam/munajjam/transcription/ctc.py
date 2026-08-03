@@ -154,6 +154,10 @@ class CTCTranscriber(BaseTranscriber):
 
         # 4. CTC Segmentation
         # Prepare text and tokens
+        text_str = " ".join(ref_words)
+        
+        # We need to map vocab characters correctly.
+        # ctc_segmentation can take character list
         char_list = [self.inv_vocab[i] for i in range(num_vocab)]
         
         config = CtcSegmentationParameters()
@@ -167,43 +171,29 @@ class CTCTranscriber(BaseTranscriber):
             
         config.replace_spaces_with_character = word_boundary
 
-        # Prepare text and tokens
-        ground_truth_mat, buggy_indices = prepare_text(config, ref_words)
-
-        # Fix the duplicate word bug in ctc_segmentation by ensuring indices are strictly increasing
-        # ctc_segmentation uses .find() which returns the first occurrence of a word.
-        utt_begin_indices = []
-        for i in range(len(buggy_indices)):
-            if i == 0:
-                utt_begin_indices.append(buggy_indices[i])
-            else:
-                if buggy_indices[i] <= utt_begin_indices[-1]:
-                    # Duplicate word detected! We calculate its offset by measuring the state length 
-                    # of the previous word using prepare_text.
-                    dummy_char = config.char_list[0] if config.char_list else "a"
-                    _, temp_indices = prepare_text(config, [ref_words[i-1], dummy_char])
-                    word_state_len = temp_indices[1] - temp_indices[0]
-                    utt_begin_indices.append(utt_begin_indices[-1] + word_state_len)
-                else:
-                    utt_begin_indices.append(buggy_indices[i])
-            
+        ground_truth_mat, utt_begin_indices = prepare_text(config, text_str)
+        
         timings, char_probs, state_list = ctc_segmentation(
             config, full_log_probs, ground_truth_mat
         )
         
-        # Calculate robust word_segments manually
-        word_segments = []
-        for i in range(len(ref_words)):
-            start = timings[utt_begin_indices[i]] * config.index_duration
-            if i < len(ref_words) - 1:
-                end = timings[utt_begin_indices[i + 1]] * config.index_duration
-            else:
-                end = timings[-1] * config.index_duration
-            score = float(char_probs[utt_begin_indices[i]])
-            word_segments.append((start, end, score))
+        segments_timing = determine_utterance_segments(
+            config, utt_begin_indices, char_probs, timings, text_str
+        )
 
         # 5. Build Segments and apply gap filling
         final_segments = []
+        # segments_timing gives (start_time, end_time, confidence) for each utterance (here we can treat each word as an utterance if we split by word, 
+        # but prepare_text splits by space natively if we pass a list of strings instead of single string).
+        
+        # Let's re-run prepare_text with list of words to get word-level timings
+        ground_truth_mat, utt_begin_indices = prepare_text(config, ref_words)
+        timings, char_probs, state_list = ctc_segmentation(
+            config, full_log_probs, ground_truth_mat
+        )
+        word_segments = determine_utterance_segments(
+            config, utt_begin_indices, char_probs, timings, ref_words
+        )
 
         # Apply gap filling: stretch word end to next word start
         for i in range(len(word_segments) - 1):

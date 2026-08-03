@@ -1,31 +1,22 @@
 from enum import Enum
-from typing import Literal
+from munajjam.transcription.base import BaseTranscriber
+from munajjam.transcription.whisperx import Whisperx
+from munajjam.transcription.sherpa import SherpaTranscriber
 
-from munajjam.transcription.whisper import WhisperTranscriber
-from munajjam.transcription.ctc import CTCTranscriber
 
-
-class WhisperBackend(Enum):
-    OPENAI = "openai"
-    FASTERWHISPER = "fasterwhisper"
-    CTC = "ctc"
+class TranscriberBackend(str, Enum):
+    WHISPERX = "whisperx"
+    SHERPA_ONNX = "sherpa_onnx"
 
 
 class WhisperFactory:
-    def create_whisper(
-        self,
-        backend: WhisperBackend,
-        model_name: str,
-        device: Literal["auto", "cpu", "cuda", "mps"] = "cuda",
-        compute_type: str = "float32",
-    ) -> WhisperTranscriber | CTCTranscriber:
-        if backend == WhisperBackend.FASTERWHISPER:
-            return WhisperTranscriber(
-                model_id=model_name, device=device, model_type="faster-whisper"
-            )
-        elif backend == WhisperBackend.OPENAI:
-            return WhisperTranscriber(model_id=model_name, device=device, model_type="transformers")
-        elif backend == WhisperBackend.CTC:
-            return CTCTranscriber(model_name=model_name, device=device, compute_type=compute_type)
+    @staticmethod
+    def get_transcriber(
+        backend: TranscriberBackend, model_name: str, device: str = "cuda"
+    ) -> BaseTranscriber:
+        if backend == TranscriberBackend.WHISPERX:
+            return Whisperx(model_name, device)
+        elif backend == TranscriberBackend.SHERPA_ONNX:
+            return SherpaTranscriber(use_q8=True)
         else:
             raise ValueError(f"Unsupported backend: {backend}")
