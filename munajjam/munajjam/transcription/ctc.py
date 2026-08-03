@@ -87,6 +87,10 @@ class CTCTranscriber(BaseTranscriber):
         # Merge short chunks (e.g. max 15 seconds = 15 * 16000 samples)
         merged_chunks = self.vad.merge_short_chunks(speech_timestamps, max_duration_samples=15 * 16000)
 
+        # Ensure wav is 1D for slicing
+        if wav.dim() == 2:
+            wav = wav[0]
+
         # 3. Extract Logits for all chunks
         # To avoid OOM, we process chunk by chunk
         all_logits = []
@@ -94,7 +98,7 @@ class CTCTranscriber(BaseTranscriber):
             for chunk in merged_chunks:
                 start_sample = chunk['start']
                 end_sample = chunk['end']
-                chunk_wav = wav[0, start_sample:end_sample].unsqueeze(0).to(self.device)
+                chunk_wav = wav[start_sample:end_sample].unsqueeze(0).to(self.device)
                 
                 inputs = self.processor(chunk_wav.squeeze().cpu().numpy(), sampling_rate=16000, return_tensors="pt")
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -108,7 +112,7 @@ class CTCTranscriber(BaseTranscriber):
         # But since we chunked it, we can create a sparse large logit matrix or pad it with blanks.
         # Actually, creating one large array of logits padded with blanks for silence is the easiest way.
         
-        total_samples = wav.shape[1]
+        total_samples = wav.shape[0]
         # Calculate expected frames. 1 frame = 320 samples for wav2vec2 (usually 16000 / 50 = 320)
         # We can just construct a full length log_probs matrix filled with blank probability = 1.0 (log = 0.0), others = -inf
         num_vocab = len(self.vocab)
