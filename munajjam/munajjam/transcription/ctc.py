@@ -168,18 +168,24 @@ class CTCTranscriber(BaseTranscriber):
         config.replace_spaces_with_character = word_boundary
 
         # Prepare text and tokens
-        text_str = config.replace_spaces_with_character.join(ref_words)
-        ground_truth_mat, _ = prepare_text(config, text_str)
+        ground_truth_mat, buggy_indices = prepare_text(config, ref_words)
 
-        # Calculate robust utt_begin_indices manually to avoid ctc_segmentation bugs with repeated words
+        # Fix the duplicate word bug in ctc_segmentation by ensuring indices are strictly increasing
+        # ctc_segmentation uses .find() which returns the first occurrence of a word.
         utt_begin_indices = []
-        current_idx = 0
-        for w in ref_words:
-            # The state index in CTC graph is exactly 2 * char_index + 1
-            utt_begin_indices.append(current_idx * 2 + 1)
-            # count valid characters that prepare_text actually kept
-            valid_chars = sum(1 for char in w if char in config.char_list)
-            current_idx += valid_chars + 1  # +1 for the word boundary token
+        for i in range(len(buggy_indices)):
+            if i == 0:
+                utt_begin_indices.append(buggy_indices[i])
+            else:
+                if buggy_indices[i] <= utt_begin_indices[-1]:
+                    # Duplicate word detected! We calculate its offset by measuring the state length 
+                    # of the previous word using prepare_text.
+                    dummy_char = config.char_list[0] if config.char_list else "a"
+                    _, temp_indices = prepare_text(config, [ref_words[i-1], dummy_char])
+                    word_state_len = temp_indices[1] - temp_indices[0]
+                    utt_begin_indices.append(utt_begin_indices[-1] + word_state_len)
+                else:
+                    utt_begin_indices.append(buggy_indices[i])
             
         timings, char_probs, state_list = ctc_segmentation(
             config, full_log_probs, ground_truth_mat
