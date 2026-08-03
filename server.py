@@ -53,7 +53,7 @@ def _run_job(job_id: str, file_location: str, surah_number: int):
                 "end_time": segment.end
             }
             if getattr(segment, "words", None):
-                ayah_data["words"] = [{"word": w.word, "start": w.start, "end": w.end} for w in segment.words]
+                ayah_data["words"] = [{"word": w.word, "start": w.start, "end": w.end, "probability": w.probability} for w in segment.words]
             response_data.append(ayah_data)
 
         jobs[job_id] = {

@@ -34,6 +34,7 @@ class TranscribedWord:
     estimated_end: float
     segment_idx: int
     word_idx_in_segment: int
+    probability: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,7 @@ def build_word_stream(segments: list[Segment]) -> list[TranscribedWord]:
                         estimated_end=wt.end,
                         segment_idx=seg_idx,
                         word_idx_in_segment=word_idx,
+                        probability=wt.probability,
                     )
                 )
             continue
@@ -711,6 +713,7 @@ def align_segments_word_dp(
                     word=w.text,
                     start=round(w.estimated_start, 3),
                     end=round(w.estimated_end, 3),
+                    probability=w.probability,
                 )
             )
 
