@@ -201,6 +201,7 @@ class CTCTranscriber(BaseTranscriber):
                 
             seg = Segment(
                 id=ayah_bnd["ayah_number"],
+                surah_id=surah_id,
                 start=ayah_start_time,
                 end=ayah_end_time,
                 text=" ".join([w.word for w in words_ts]),
