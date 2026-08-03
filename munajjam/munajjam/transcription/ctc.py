@@ -19,7 +19,7 @@ from munajjam.config import get_settings
 from munajjam.data import load_surah_ayahs
 from munajjam.models import Segment, SegmentType, WordTimestamp
 from munajjam.transcription.base import BaseTranscriber
-from munajjam.core.vad import SileroVAD
+
 
 class CTCTranscriber(BaseTranscriber):
     def __init__(self, model_name: str = "jonatasgrosman/wav2vec2-large-xlsr-53-arabic", device: str = "cuda", compute_type: str = "float32"):
@@ -31,7 +31,6 @@ class CTCTranscriber(BaseTranscriber):
         self.model = Wav2Vec2ForCTC.from_pretrained(self.model_name).to(self.device)
         self.model.eval()
         
-        self.vad = SileroVAD(sampling_rate=16000)
 
         # Get vocabulary for ctc-segmentation
         self.vocab = self.processor.tokenizer.get_vocab()
@@ -47,6 +46,26 @@ class CTCTranscriber(BaseTranscriber):
         text = re.sub(r"[أإآٱ]", "ا", text)
         text = re.sub(r"[^\u0621-\u064A\s]", "", text)
         return text.strip()
+
+    def read_audio_ffmpeg(self, file: str | Path, sr: int = 16000) -> torch.Tensor:
+        import subprocess
+        import torchaudio
+        try:
+            out = subprocess.check_output([
+                "ffmpeg", "-i", str(file),
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ac", "1", "-ar", str(sr), "-"
+            ], stderr=subprocess.DEVNULL)
+            wav = np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+            return torch.from_numpy(wav).unsqueeze(0)
+        except Exception:
+            wav, current_sr = torchaudio.load(str(file))
+            if current_sr != sr:
+                transform = torchaudio.transforms.Resample(orig_freq=current_sr, new_freq=sr)
+                wav = transform(wav)
+            if wav.size(0) > 1:
+                wav = wav.mean(dim=0, keepdim=True)
+            return wav
 
     def transcribe(
         self,
@@ -83,46 +102,51 @@ class CTCTranscriber(BaseTranscriber):
         if not ref_words:
             return []
 
-        # 2. VAD Splitting
-        wav, speech_timestamps = self.vad.split_audio(audio_path)
-        # Merge short chunks (e.g. max 15 seconds = 15 * 16000 samples)
-        merged_chunks = self.vad.merge_short_chunks(speech_timestamps, max_duration_samples=15 * 16000)
-
-        # Ensure wav is 1D for slicing
-        if wav.dim() == 2:
-            wav = wav[0]
-
-        # 3. Extract Logits for all chunks
-        # To avoid OOM, we process chunk by chunk
+        # 2. Load Audio
+        wav = self.read_audio_ffmpeg(audio_path, sr=16000)
+        total_samples = wav.shape[1]
+        
+        # 3. Extract Logits using sliding window to prevent OOM and VAD dropping speech
+        window_size = 15 * 16000
+        overlap = 2 * 16000
+        step = window_size - overlap
+        
         all_logits = []
         with torch.no_grad():
-            for chunk in merged_chunks:
-                start_sample = chunk['start']
-                end_sample = chunk['end']
-                chunk_wav = wav[start_sample:end_sample].unsqueeze(0).to(self.device)
+            start = 0
+            while start < total_samples:
+                end = min(start + window_size, total_samples)
+                chunk_wav = wav[0, start:end].unsqueeze(0).to(self.device)
                 
                 inputs = self.processor(chunk_wav.squeeze().cpu().numpy(), sampling_rate=16000, return_tensors="pt")
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 
                 logits = self.model(**inputs).logits
-                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-                all_logits.append((log_probs.squeeze(0).cpu().numpy(), start_sample, end_sample))
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1).squeeze(0).cpu().numpy()
+                
+                start_frame = start // 320
+                end_frame = end // 320
+                
+                if start > 0:
+                    discard_front = (overlap // 2) // 320
+                    log_probs = log_probs[discard_front:]
+                    start_frame += discard_front
+                    
+                if end < total_samples:
+                    discard_back = (overlap // 2) // 320
+                    log_probs = log_probs[:-discard_back]
+                    end_frame -= discard_back
+                
+                all_logits.append((log_probs, start_frame))
+                start += step
 
-        # We need to map reference text to ctc_segmentation format
-        # CTC-segmentation usually takes the entire unsegmented audio logits.
-        # But since we chunked it, we can create a sparse large logit matrix or pad it with blanks.
-        # Actually, creating one large array of logits padded with blanks for silence is the easiest way.
-        
-        total_samples = wav.shape[0]
-        # Calculate expected frames. 1 frame = 320 samples for wav2vec2 (usually 16000 / 50 = 320)
-        # We can just construct a full length log_probs matrix filled with blank probability = 1.0 (log = 0.0), others = -inf
-        num_vocab = len(self.vocab)
+        # Reconstruct full_log_probs
         total_frames = total_samples // 320 + 1
+        num_vocab = len(self.vocab)
         full_log_probs = np.full((total_frames, num_vocab), -100.0, dtype=np.float32)
         full_log_probs[:, self.blank_id] = 0.0
 
-        for lp, start_sample, end_sample in all_logits:
-            start_frame = start_sample // 320
+        for lp, start_frame in all_logits:
             num_frames = lp.shape[0]
             end_frame = min(start_frame + num_frames, total_frames)
             actual_frames = end_frame - start_frame
@@ -139,6 +163,7 @@ class CTCTranscriber(BaseTranscriber):
         config = CtcSegmentationParameters()
         config.char_list = char_list
         config.blank = self.blank_id
+        config.index_duration = 0.02  # Explicitly set to wav2vec2's 20ms frame shift
         # Replace spaces with model's word boundary token if any, or just use space
         word_boundary = self.processor.tokenizer.word_delimiter_token
         if word_boundary is None:
