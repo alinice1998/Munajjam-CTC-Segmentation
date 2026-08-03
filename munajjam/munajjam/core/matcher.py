@@ -130,7 +130,7 @@ def check_boundary_match(
     ayah_text: str,
     position: str = "end",
     n_words: int = 3,
-    threshold: float = 0.6,
+    threshold: float = 0.3,
 ) -> bool:
     """
     Check if segment text matches ayah at a boundary (start or end).

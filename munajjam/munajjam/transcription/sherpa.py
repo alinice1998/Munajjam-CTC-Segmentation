@@ -112,7 +112,7 @@ class SherpaTranscriber(BaseTranscriber):
             for j in range(1, m + 1):
                 ew = self._normalize_arabic(extracted_words[j - 1]["word"])
                 match_score = fuzz.ratio(rw, ew) / 100.0
-                if match_score < 0.6:
+                if match_score < 0.3:
                     match_score = -1.0
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1] + match_score)
 
@@ -123,7 +123,7 @@ class SherpaTranscriber(BaseTranscriber):
             ew = self._normalize_arabic(extracted_words[j - 1]["word"])
             match_score = fuzz.ratio(rw, ew) / 100.0
 
-            if match_score >= 0.6 and dp[i][j] == dp[i - 1][j - 1] + match_score:
+            if match_score >= 0.3 and dp[i][j] == dp[i - 1][j - 1] + match_score:
                 mapped_alignments[i - 1] = extracted_words[j - 1]
                 i -= 1
                 j -= 1

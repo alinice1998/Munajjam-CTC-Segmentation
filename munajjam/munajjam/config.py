@@ -82,7 +82,7 @@ class MunajjamSettings(BaseSettings):
     # ============ Alignment Settings ============
 
     similarity_threshold: float = Field(
-        default=0.6,
+        default=0.3,
         description="Minimum similarity score for ayah matching",
         ge=0.0,
         le=1.0,

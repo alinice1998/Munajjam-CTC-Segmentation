@@ -93,7 +93,7 @@ class Whisperx(BaseTranscriber):
                     for j in range(1, m_tr + 1):
                         ew = self._normalize_arabic(transcribed_words[j - 1]["word"])
                         match_score = fuzz.ratio(rw, ew) / 100.0
-                        if match_score < 0.6:
+                        if match_score < 0.3:
                             match_score = -1.0
                         dp_inj[i][j] = max(
                             dp_inj[i - 1][j], dp_inj[i][j - 1], dp_inj[i - 1][j - 1] + match_score
@@ -106,7 +106,7 @@ class Whisperx(BaseTranscriber):
                     ew = self._normalize_arabic(transcribed_words[j - 1]["word"])
                     match_score = fuzz.ratio(rw, ew) / 100.0
 
-                    if match_score >= 0.6 and dp_inj[i][j] == dp_inj[i - 1][j - 1] + match_score:
+                    if match_score >= 0.3 and dp_inj[i][j] == dp_inj[i - 1][j - 1] + match_score:
                         mapped_seg_indices[i - 1] = transcribed_words[j - 1]["seg_idx"]
                         i -= 1
                         j -= 1
@@ -171,7 +171,7 @@ class Whisperx(BaseTranscriber):
             for j in range(1, m + 1):
                 ew = self._normalize_arabic(extracted_words[j - 1]["word"])
                 match_score = fuzz.ratio(rw, ew) / 100.0
-                if match_score < 0.6:
+                if match_score < 0.3:
                     match_score = -1.0
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1] + match_score)
 
@@ -182,7 +182,7 @@ class Whisperx(BaseTranscriber):
             ew = self._normalize_arabic(extracted_words[j - 1]["word"])
             match_score = fuzz.ratio(rw, ew) / 100.0
 
-            if match_score >= 0.6 and dp[i][j] == dp[i - 1][j - 1] + match_score:
+            if match_score >= 0.3 and dp[i][j] == dp[i - 1][j - 1] + match_score:
                 mapped_alignments[i - 1] = extracted_words[j - 1]
                 i -= 1
                 j -= 1
