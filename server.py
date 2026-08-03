@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from munajjam.config import get_settings
+from munajjam.transcription.whisperFactory import WhisperFactory, TranscriberBackend
 
-from munajjam.transcription.whisperFactory import WhisperFactory, WhisperBackend
+settings = get_settings()
 
 app = FastAPI(title="Munajjam API Server")
 
