@@ -188,6 +188,10 @@ class CTCTranscriber(BaseTranscriber):
             words_ts = []
             for w_idx in range(a_start, a_end + 1):
                 w_start, w_end, w_conf = word_segments[w_idx]
+                
+                # Clip confidence to be between 0.0 and 1.0 to avoid Pydantic validation errors
+                w_conf = max(0.0, min(1.0, float(w_conf)))
+                
                 words_ts.append(WordTimestamp(
                     word=ref_words[w_idx],
                     start=w_start,
