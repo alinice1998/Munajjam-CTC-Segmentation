@@ -175,7 +175,8 @@ class CTCTranscriber(BaseTranscriber):
         utt_begin_indices = []
         current_idx = 0
         for w in ref_words:
-            utt_begin_indices.append(current_idx)
+            # The state index in CTC graph is exactly 2 * char_index + 1
+            utt_begin_indices.append(current_idx * 2 + 1)
             # count valid characters that prepare_text actually kept
             valid_chars = sum(1 for char in w if char in config.char_list)
             current_idx += valid_chars + 1  # +1 for the word boundary token
