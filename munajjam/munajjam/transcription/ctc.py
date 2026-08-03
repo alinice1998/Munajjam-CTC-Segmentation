@@ -11,7 +11,8 @@ from ctc_segmentation import (
     prepare_text,
     prepare_token_list,
     ctc_segmentation,
-    determine_utterance_segments
+    determine_utterance_segments,
+    CtcSegmentationParameters
 )
 
 from munajjam.config import get_settings
@@ -135,7 +136,7 @@ class CTCTranscriber(BaseTranscriber):
         # ctc_segmentation can take character list
         char_list = [self.inv_vocab[i] for i in range(num_vocab)]
         
-        config = ctc_segmentation.CtcSegmentationParameters()
+        config = CtcSegmentationParameters()
         config.char_list = char_list
         config.blank = self.blank_id
         # Replace spaces with model's word boundary token if any, or just use space
