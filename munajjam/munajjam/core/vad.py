@@ -21,12 +21,26 @@ class SileroVAD:
          self.VADIterator,
          self.collect_chunks) = utils
 
+    def read_audio_ffmpeg(self, file: str | Path, sr: int = 16000) -> torch.Tensor:
+        import subprocess
+        try:
+            out = subprocess.check_output([
+                "ffmpeg", "-i", str(file),
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ac", "1", "-ar", str(sr), "-"
+            ], stderr=subprocess.DEVNULL)
+            wav = np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+            return torch.from_numpy(wav).unsqueeze(0)
+        except Exception as e:
+            # Fallback to torchaudio if ffmpeg fails
+            return self.read_audio(str(file), sampling_rate=sr)
+
     def split_audio(self, audio_path: str | Path) -> Tuple[torch.Tensor, List[dict]]:
         """
         Reads audio and returns the waveform and a list of speech timestamps.
         Each timestamp dict contains 'start' and 'end' in samples.
         """
-        wav = self.read_audio(str(audio_path), sampling_rate=self.sampling_rate)
+        wav = self.read_audio_ffmpeg(audio_path, sr=self.sampling_rate)
         # get speech timestamps
         speech_timestamps = self.get_speech_timestamps(
             wav, 
