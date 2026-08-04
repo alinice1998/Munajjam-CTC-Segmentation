@@ -76,6 +76,7 @@ class CTCTranscriber(BaseTranscriber):
         *,
         surah_id: int,
         batch_size: int = 16,
+        blank_reward: float = 2.0,
     ) -> list[Segment]:
         
         # 1. Load Reference Text
@@ -154,6 +155,11 @@ class CTCTranscriber(BaseTranscriber):
             end_frame = min(start_frame + num_frames, total_frames)
             actual_frames = end_frame - start_frame
             full_log_probs[start_frame:end_frame] = lp[:actual_frames]
+
+        # Apply Blank Reward to mathematically tighten or loosen word boundaries
+        if blank_reward != 0.0:
+            full_log_probs[:, self.blank_id] += blank_reward
+
 
         # 4. CTC Segmentation
         # Prepare text and tokens
