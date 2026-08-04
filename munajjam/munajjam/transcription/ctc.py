@@ -24,7 +24,10 @@ from munajjam.transcription.base import BaseTranscriber
 class CTCTranscriber(BaseTranscriber):
     def __init__(self, model_name: str = "jonatasgrosman/wav2vec2-large-xlsr-53-arabic", device: str = "cuda", compute_type: str = "float32"):
         self.model_name = model_name
-        self.device = device if torch.cuda.is_available() else "cpu"
+        if device == "auto":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
         
         print(f"Loading wav2vec2 model {self.model_name}...")
         self.processor = Wav2Vec2Processor.from_pretrained(self.model_name)
