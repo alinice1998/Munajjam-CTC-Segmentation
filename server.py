@@ -1,4 +1,7 @@
+import sys
 import os
+sys.path.insert(0, os.path.abspath("."))
+
 import uuid
 import shutil
 import gc
@@ -43,7 +46,7 @@ def _run_job(job_id: str, file_location: str, surah_number: int):
         print(f"[Job {job_id[:8]}] Started processing Surah {surah_number} with CTC Segmentation")
 
         # استخدام CTC للحصول على تزمين على مستوى الكلمات
-        segments = global_transcriber.transcribe(file_location, surah_id=surah_number)
+        segments = global_transcriber.transcribe(file_location, surah_id=surah_number, blank_reward=5.0)
 
         response_data = []
         for segment in segments:
