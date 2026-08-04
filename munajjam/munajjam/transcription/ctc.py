@@ -213,6 +213,34 @@ class CTCTranscriber(BaseTranscriber):
             for w_idx in range(a_start, a_end + 1):
                 w_start, w_end, w_conf = word_segments[w_idx]
                 
+                # --- NEW TRIMMING LOGIC ---
+                # Shrink word boundaries to actual acoustic peaks (non-blank)
+                frame_dur = 0.02
+                s_f = int(w_start / frame_dur)
+                e_f = int(w_end / frame_dur)
+                
+                # Trim left
+                while s_f < e_f and s_f < len(full_log_probs):
+                    probs = np.exp(full_log_probs[s_f])
+                    if (1.0 - probs[self.blank_id]) > 0.01:  # 1% chance of any letter
+                        break
+                    s_f += 1
+                    
+                # Trim right
+                while e_f > s_f and e_f <= len(full_log_probs):
+                    probs = np.exp(full_log_probs[e_f - 1])
+                    if (1.0 - probs[self.blank_id]) > 0.01:
+                        break
+                    e_f -= 1
+                
+                # Add natural padding (e.g. -40ms left, +80ms right)
+                s_f = max(int(w_start / frame_dur), s_f - 2)
+                e_f = min(int(w_end / frame_dur), e_f + 4)
+                
+                w_start = s_f * frame_dur
+                w_end = e_f * frame_dur
+                # --------------------------
+
                 # Clip confidence to be between 0.0 and 1.0 to avoid Pydantic validation errors
                 w_conf = max(0.0, min(1.0, float(w_conf)))
                 
