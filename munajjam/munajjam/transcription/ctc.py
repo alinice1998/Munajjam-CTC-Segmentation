@@ -199,6 +199,12 @@ class CTCTranscriber(BaseTranscriber):
         for i in range(len(word_segments) - 1):
             word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
             
+        # Ensure the last word extends to the end of the audio
+        audio_duration = total_samples / 16000.0
+        if len(word_segments) > 0:
+            last_idx = len(word_segments) - 1
+            word_segments[last_idx] = (word_segments[last_idx][0], audio_duration, word_segments[last_idx][2])
+            
         # Build Ayah segments
         for ayah_bnd in ayah_boundaries:
             a_start = ayah_bnd["start_idx"]

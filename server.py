@@ -30,7 +30,7 @@ _executor = ThreadPoolExecutor(max_workers=1)
 
 print("Initializing global CTC transcriber (models will be loaded lazily on first request)...")
 global_transcriber = WhisperFactory.get_transcriber(
-    TranscriberBackend.SHERPA_ONNX, model_name=settings.wav2vec2_model_id, device=settings.device
+    TranscriberBackend.CTC_SEGMENTATION, model_name=settings.wav2vec2_model_id, device=settings.device
 )
 
 def _run_job(job_id: str, file_location: str, surah_number: int):
