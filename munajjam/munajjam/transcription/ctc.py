@@ -76,7 +76,7 @@ class CTCTranscriber(BaseTranscriber):
         *,
         surah_id: int,
         batch_size: int = 16,
-        blank_reward: float = 2.0,
+        blank_reward: float = 5.0,
     ) -> list[Segment]:
         
         # 1. Load Reference Text
