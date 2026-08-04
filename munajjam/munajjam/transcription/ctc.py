@@ -9,17 +9,17 @@ import numpy as np
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 from ctc_segmentation import (
     prepare_text,
+    prepare_token_list,
     ctc_segmentation,
     determine_utterance_segments,
     CtcSegmentationParameters
 )
 
+from munajjam.config import get_settings
 from munajjam.data import load_surah_ayahs
 from munajjam.models import Segment, SegmentType, WordTimestamp
 from munajjam.transcription.base import BaseTranscriber
-from munajjam.core.vad import SileroVAD
-from munajjam.core.dp_core import align_segments_dp_with_constraints
-from munajjam.core.arabic import normalize_arabic, detect_segment_type
+
 
 class CTCTranscriber(BaseTranscriber):
     def __init__(self, model_name: str = "jonatasgrosman/wav2vec2-large-xlsr-53-arabic", device: str = "cuda", compute_type: str = "float32"):
@@ -29,23 +29,46 @@ class CTCTranscriber(BaseTranscriber):
         else:
             self.device = device
         
-        print(f"Loading wav2vec2 model {self.model_name} on {self.device}...")
+        print(f"Loading wav2vec2 model {self.model_name}...")
         self.processor = Wav2Vec2Processor.from_pretrained(self.model_name)
         self.model = Wav2Vec2ForCTC.from_pretrained(self.model_name).to(self.device)
         self.model.eval()
         
-        print("Loading SileroVAD...")
-        self.vad = SileroVAD(sampling_rate=16000)
 
         # Get vocabulary for ctc-segmentation
         self.vocab = self.processor.tokenizer.get_vocab()
+        # ctc-segmentation expects token list mapped to indices
         self.inv_vocab = {v: k for k, v in self.vocab.items()}
+        # Usually blank is 0 in HF wav2vec2, but let's get it dynamically
         self.blank_id = self.processor.tokenizer.pad_token_id
         if self.blank_id is None:
             self.blank_id = self.vocab.get("<pad>", 0)
 
     def _normalize_arabic(self, text: str) -> str:
-        return normalize_arabic(text)
+        text = re.sub(r"[\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]", "", text)
+        text = re.sub(r"[أإآٱ]", "ا", text)
+        text = re.sub(r"[^\u0621-\u064A\s]", "", text)
+        return text.strip()
+
+    def read_audio_ffmpeg(self, file: str | Path, sr: int = 16000) -> torch.Tensor:
+        import subprocess
+        import torchaudio
+        try:
+            out = subprocess.check_output([
+                "ffmpeg", "-i", str(file),
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ac", "1", "-ar", str(sr), "-"
+            ], stderr=subprocess.DEVNULL)
+            wav = np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+            return torch.from_numpy(wav).unsqueeze(0)
+        except Exception:
+            wav, current_sr = torchaudio.load(str(file))
+            if current_sr != sr:
+                transform = torchaudio.transforms.Resample(orig_freq=current_sr, new_freq=sr)
+                wav = transform(wav)
+            if wav.size(0) > 1:
+                wav = wav.mean(dim=0, keepdim=True)
+            return wav
 
     def transcribe(
         self,
@@ -60,145 +83,164 @@ class CTCTranscriber(BaseTranscriber):
         if not ayahs:
             return []
 
-        # 2. VAD: Split audio into speech chunks
-        wav, speech_timestamps = self.vad.split_audio(audio_path)
-        # Merge short chunks to have decent context (e.g. up to 15 seconds)
-        merged_timestamps = self.vad.merge_short_chunks(speech_timestamps, max_duration_samples=15 * 16000)
+        # Normalization and flattening
+        ref_words = []
+        ayah_boundaries = []
+        current_word_idx = 0
         
-        if not merged_timestamps:
+        for ayah in ayahs:
+            words = ayah.text.split()
+            ayah_start_word_idx = current_word_idx
+            for w in words:
+                norm_w = self._normalize_arabic(w)
+                if norm_w:
+                    ref_words.append(norm_w)
+                    current_word_idx += 1
+            ayah_boundaries.append({
+                "ayah_number": ayah.ayah_number,
+                "start_idx": ayah_start_word_idx,
+                "end_idx": current_word_idx - 1
+            })
+
+        if not ref_words:
             return []
-            
-        # 3. ASR: Transcribe each chunk
-        transcribed_segments = []
-        for chunk in merged_timestamps:
-            start_sample = chunk['start']
-            end_sample = chunk['end']
-            
-            chunk_wav = wav[0, start_sample:end_sample].unsqueeze(0).to(self.device)
-            inputs = self.processor(chunk_wav.squeeze().cpu().numpy(), sampling_rate=16000, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                logits = self.model(**inputs).logits
-                predicted_ids = torch.argmax(logits, dim=-1)
-                transcription = self.processor.batch_decode(predicted_ids)[0]
+
+        # 2. Load Audio
+        wav = self.read_audio_ffmpeg(audio_path, sr=16000)
+        total_samples = wav.shape[1]
+        
+        # 3. Extract Logits using sliding window to prevent OOM and VAD dropping speech
+        window_size = 15 * 16000
+        overlap = 2 * 16000
+        step = window_size - overlap
+        
+        all_logits = []
+        with torch.no_grad():
+            start = 0
+            while start < total_samples:
+                end = min(start + window_size, total_samples)
+                chunk_wav = wav[0, start:end].unsqueeze(0).to(self.device)
                 
-            seg_type, _ = detect_segment_type(transcription)
-            transcribed_segments.append(Segment(
-                id=0,
-                surah_id=surah_id,
-                start=start_sample / 16000.0,
-                end=end_sample / 16000.0,
-                text=transcription,
-                type=seg_type
-            ))
-            
-        # 4. DP Alignment: Map transcribed segments to Ayahs
-        alignment_results = align_segments_dp_with_constraints(
-            segments=transcribed_segments,
-            ayahs=ayahs,
-            silences_ms=None,
-            max_segments_per_ayah=10
-        )
-        
-        if not alignment_results:
-            return []
-            
-        # 5. CTC Segmentation on each aligned Ayah
-        final_segments = []
+                inputs = self.processor(chunk_wav.squeeze().cpu().numpy(), sampling_rate=16000, return_tensors="pt")
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                logits = self.model(**inputs).logits
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1).squeeze(0).cpu().numpy()
+                
+                start_frame = start // 320
+                end_frame = end // 320
+                
+                if start > 0:
+                    discard_front = (overlap // 2) // 320
+                    log_probs = log_probs[discard_front:]
+                    start_frame += discard_front
+                    
+                if end < total_samples:
+                    discard_back = (overlap // 2) // 320
+                    log_probs = log_probs[:-discard_back]
+                    end_frame -= discard_back
+                
+                all_logits.append((log_probs, start_frame))
+                start += step
+
+        # Reconstruct full_log_probs
+        total_frames = total_samples // 320 + 1
         num_vocab = len(self.vocab)
+        full_log_probs = np.full((total_frames, num_vocab), -100.0, dtype=np.float32)
+        full_log_probs[:, self.blank_id] = 0.0
+
+        for lp, start_frame in all_logits:
+            num_frames = lp.shape[0]
+            end_frame = min(start_frame + num_frames, total_frames)
+            actual_frames = end_frame - start_frame
+            full_log_probs[start_frame:end_frame] = lp[:actual_frames]
+
+        # 4. CTC Segmentation
+        # Prepare text and tokens
+        text_str = " ".join(ref_words)
+        
+        # We need to map vocab characters correctly.
+        # ctc_segmentation can take character list
         char_list = [self.inv_vocab[i] for i in range(num_vocab)]
         
         config = CtcSegmentationParameters()
         config.char_list = char_list
         config.blank = self.blank_id
-        config.index_duration = 0.02
+        config.index_duration = 0.02  # Explicitly set to wav2vec2's 20ms frame shift
+        # Replace spaces with model's word boundary token if any, or just use space
         word_boundary = self.processor.tokenizer.word_delimiter_token
         if word_boundary is None:
             word_boundary = "|"
+            
         config.replace_spaces_with_character = word_boundary
+
+        ground_truth_mat, utt_begin_indices = prepare_text(config, text_str)
         
-        for result in alignment_results:
-            ayah = result.ayah
-            ayah_start_s = result.start_time
-            ayah_end_s = result.end_time
+        timings, char_probs, state_list = ctc_segmentation(
+            config, full_log_probs, ground_truth_mat
+        )
+        
+        segments_timing = determine_utterance_segments(
+            config, utt_begin_indices, char_probs, timings, text_str
+        )
+
+        # 5. Build Segments and apply gap filling
+        final_segments = []
+        # segments_timing gives (start_time, end_time, confidence) for each utterance (here we can treat each word as an utterance if we split by word, 
+        # but prepare_text splits by space natively if we pass a list of strings instead of single string).
+        
+        # Let's re-run prepare_text with list of words to get word-level timings
+        ground_truth_mat, utt_begin_indices = prepare_text(config, ref_words)
+        timings, char_probs, state_list = ctc_segmentation(
+            config, full_log_probs, ground_truth_mat
+        )
+        word_segments = determine_utterance_segments(
+            config, utt_begin_indices, char_probs, timings, ref_words
+        )
+
+        # Apply gap filling: stretch word end to next word start
+        for i in range(len(word_segments) - 1):
+            word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
             
-            # Allow a tiny padding for boundary safety (0.2s)
-            padding = 0.2
-            padded_start_s = max(0.0, ayah_start_s - padding)
-            padded_end_s = min(wav.shape[1] / 16000.0, ayah_end_s + padding)
+        # Ensure the last word extends to the end of the audio
+        audio_duration = total_samples / 16000.0
+        if len(word_segments) > 0:
+            last_idx = len(word_segments) - 1
+            word_segments[last_idx] = (word_segments[last_idx][0], audio_duration, word_segments[last_idx][2])
             
-            start_sample = int(padded_start_s * 16000)
-            end_sample = int(padded_end_s * 16000)
+        # Build Ayah segments
+        for ayah_bnd in ayah_boundaries:
+            a_start = ayah_bnd["start_idx"]
+            a_end = ayah_bnd["end_idx"]
             
-            chunk_wav = wav[0, start_sample:end_sample].unsqueeze(0).to(self.device)
-            
-            # Get logits
-            inputs = self.processor(chunk_wav.squeeze().cpu().numpy(), sampling_rate=16000, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                logits = self.model(**inputs).logits
-                log_probs = torch.nn.functional.log_softmax(logits, dim=-1).squeeze(0).cpu().numpy()
-                
-            # Prepare reference words for this Ayah
-            ref_words = [w for w in ayah.text.split() if self._normalize_arabic(w)]
-            if not ref_words:
+            if a_start >= len(word_segments) or a_end >= len(word_segments):
                 continue
                 
-            # Run ctc_segmentation
-            try:
-                ground_truth_mat, utt_begin_indices = prepare_text(config, ref_words)
-                timings, char_probs, state_list = ctc_segmentation(
-                    config, log_probs, ground_truth_mat
-                )
-                word_segments = determine_utterance_segments(
-                    config, utt_begin_indices, char_probs, timings, ref_words
-                )
-            except Exception as e:
-                print(f"Warning: CTC segmentation failed for ayah {ayah.ayah_number}: {e}")
-                # Fallback: distribute evenly
-                dur = padded_end_s - padded_start_s
-                step = dur / len(ref_words)
-                word_segments = [(i*step, (i+1)*step, 0.5) for i in range(len(ref_words))]
+            ayah_start_time = word_segments[a_start][0]
+            ayah_end_time = word_segments[a_end][1]
             
-            # Gap filling within Ayah
-            for i in range(len(word_segments) - 1):
-                word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
-            
-            chunk_duration = (end_sample - start_sample) / 16000.0
-            if len(word_segments) > 0:
-                last_idx = len(word_segments) - 1
-                word_segments[last_idx] = (word_segments[last_idx][0], chunk_duration, word_segments[last_idx][2])
-                
-            # Convert to absolute timestamps
             words_ts = []
-            for w_idx in range(len(ref_words)):
+            for w_idx in range(a_start, a_end + 1):
                 w_start, w_end, w_conf = word_segments[w_idx]
+                
+                # Clip confidence to be between 0.0 and 1.0 to avoid Pydantic validation errors
                 w_conf = max(0.0, min(1.0, float(w_conf)))
-                
-                # Undo padding offset
-                abs_start = padded_start_s + w_start
-                abs_end = padded_start_s + w_end
-                
-                # Clamp to actual ayah boundaries just in case
-                abs_start = max(ayah_start_s, abs_start)
                 
                 words_ts.append(WordTimestamp(
                     word=ref_words[w_idx],
-                    start=abs_start,
-                    end=abs_end,
+                    start=w_start,
+                    end=w_end,
                     probability=w_conf
                 ))
                 
             seg = Segment(
-                id=ayah.ayah_number,
+                id=ayah_bnd["ayah_number"],
                 surah_id=surah_id,
-                start=ayah_start_s,
-                end=ayah_end_s,
+                start=ayah_start_time,
+                end=ayah_end_time,
                 text=" ".join([w.word for w in words_ts]),
                 words=words_ts
             )
             final_segments.append(seg)
-            
+
         return final_segments
