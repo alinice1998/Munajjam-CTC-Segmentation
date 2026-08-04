@@ -174,22 +174,13 @@ class CTCTranscriber(BaseTranscriber):
             
         config.replace_spaces_with_character = word_boundary
 
-        ground_truth_mat, utt_begin_indices = prepare_text(config, text_str)
-        
-        timings, char_probs, state_list = ctc_segmentation(
-            config, full_log_probs, ground_truth_mat
-        )
-        
-        segments_timing = determine_utterance_segments(
-            config, utt_begin_indices, char_probs, timings, text_str
-        )
+        # We only need one run with the list of words to get word-level timings
+
 
         # 5. Build Segments and apply gap filling
         final_segments = []
-        # segments_timing gives (start_time, end_time, confidence) for each utterance (here we can treat each word as an utterance if we split by word, 
-        # but prepare_text splits by space natively if we pass a list of strings instead of single string).
-        
-        # Let's re-run prepare_text with list of words to get word-level timings
+        # Generate word-level segments directly
+
         ground_truth_mat, utt_begin_indices = prepare_text(config, ref_words)
         timings, char_probs, state_list = ctc_segmentation(
             config, full_log_probs, ground_truth_mat
@@ -198,16 +189,8 @@ class CTCTranscriber(BaseTranscriber):
             config, utt_begin_indices, char_probs, timings, ref_words
         )
 
-        # We will not aggressively stretch word boundaries as it cuts off letters.
-        # ctc_segmentation already provides precise start and end times.
-        # for i in range(len(word_segments) - 1):
-        #     word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
-            
-        # Ensure the last word extends to the end of the audio
-        audio_duration = total_samples / 16000.0
-        if len(word_segments) > 0:
-            last_idx = len(word_segments) - 1
-            word_segments[last_idx] = (word_segments[last_idx][0], audio_duration, word_segments[last_idx][2])
+        # We rely purely on the timings output by the model (via determine_utterance_segments)
+        # without any aggressive gap filling or forcing the last word to the end of the audio.
             
         # Build Ayah segments
         for ayah_bnd in ayah_boundaries:
