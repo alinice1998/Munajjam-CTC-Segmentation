@@ -47,6 +47,10 @@ dependencies = [
     "soundfile>=0.12.0",
     "sherpa-onnx>=1.10.0",
     "requests>=2.31.0",
+    "transformers",
+    "torch",
+    "torchaudio",
+    "ctc-segmentation",
 ]
 
 [project.optional-dependencies]
