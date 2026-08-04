@@ -198,9 +198,10 @@ class CTCTranscriber(BaseTranscriber):
             config, utt_begin_indices, char_probs, timings, ref_words
         )
 
-        # Apply gap filling: stretch word end to next word start
-        for i in range(len(word_segments) - 1):
-            word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
+        # We will not aggressively stretch word boundaries as it cuts off letters.
+        # ctc_segmentation already provides precise start and end times.
+        # for i in range(len(word_segments) - 1):
+        #     word_segments[i] = (word_segments[i][0], word_segments[i+1][0], word_segments[i][2])
             
         # Ensure the last word extends to the end of the audio
         audio_duration = total_samples / 16000.0
